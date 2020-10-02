@@ -1,0 +1,521 @@
+<html>
+<head>
+<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.3.1/css/bootstrap.min.css" integrity="sha384-ggOyR0iXCbMQv3Xipma34MD+dH/1fQ784/j6cY/iJTQUOhcWr7x9JvoRxT2MZw1T" crossorigin="anonymous">
+<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css">
+<script src="https://cdn.jsdelivr.net/npm/vue"></script>
+<script src="https://cdn.jsdelivr.net/npm/vue-table-dynamic"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js" integrity="sha512-rKFvwjvE4liWPlFnvH4ZhRDfNZ9FOpdkD/BU5gAIA3VS3vOQrQ5BjKgbO3kxebKhHdHcNUHLqxQYSoxee9UwgA==" crossorigin="anonymous"></script>
+<style>
+html {
+  font-size: 12;
+}
+textarea {
+  font-family:Consolas,Monaco,Lucida Console,Liberation Mono,DejaVu Sans Mono,Bitstream Vera Sans Mono,Courier New, monospace;
+}
+.row {
+  padding: 20px;
+}
+</style>
+</head>
+
+<body>
+  <div id="app" class="container">
+    <div class="row">
+      <div class="col">
+        <img style="width: 300px;" src="https://www.paloaltonetworks.com/content/dam/pan/en_US/images/logos/brand/primary-company-logo/PANW_Parent_Brand_Primary_Logo_RGB.png"/>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col col-lg-6">
+        <h4>
+          CSV from Palo Alto Networks IoT
+        </h4>
+        <textarea v-model="devicesText"
+                  placeholder="Paste the devices inventory CSV from Palo Alto Networks IoT security"
+                  @change="devicesTextChanged"
+                  style="width: 100%; height: 200px;">
+        </textarea>
+      </div>
+
+      <div class="col col-lg-6">
+        <h4>
+          IOT_CONFIG JSON
+        </h4>
+        <textarea v-model="iotConfigText"
+                  placeholder="This JSON is for the Palo Alto Networks IoT XSOAR integration"
+                  @change="iotConfigTextChanged"
+                  style="width: 100%; height: 200px;">
+        </textarea>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="col">
+        <h4>
+          Devices without Owner mapped (Total: {{ devicesWithoutOwner.count }})
+        </h4>
+        <vue-table-dynamic ref="noOwners" :params="devicesWithoutOwner"></vue-table-dynamic>
+      </div>
+    </div>
+
+
+    <div class="row">
+      <div style="position: relative;" class="col">
+        <h4>
+          Define your groups
+        </h4>
+        <div style="position: absolute; top: 0; right: 15;">
+          <i class="fa fa-plus" @click="addGroup"></i>
+          <i class="fa fa-trash" @click="deleteGroups"></i>
+        </div>
+        <vue-table-dynamic ref="groups" :params="groups" @cell-change="groupsChanged"></vue-table-dynamic>
+      </div>
+    </div>
+
+    <div class="row">
+      <div style="position: relative;" class="col">
+        <h4>
+          Define your device IDs with the IOT Owner
+        </h4>
+        <div style="position: absolute; top: 0; right: 15;">
+          <i class="fa fa-plus" @click="addDevice"></i>
+          <i class="fa fa-trash" @click="deleteDevices"></i>
+        </div>
+        <vue-table-dynamic ref="devices" :params="devices" @cell-change="devicesChanged">
+          <template v-slot:column-1="{ props }">
+            <select v-model="devices.data[props.row][1]" @change="refresh">
+              <option v-for="group in availableGroups.slice(1)">
+                {{ group }}
+              </option>
+            </select>
+          </template>
+        </vue-table-dynamic>
+      </div>
+    </div>
+
+    <div class="row">
+      <div style="position: relative;" class="col">
+        <h4>
+          Define your alerts RACI
+        </h4>
+        <div style="position: absolute; top: 0; right: 15;">
+          <i class="fa fa-plus" @click="addAlert"></i>
+          <i class="fa fa-trash" @click="deleteAlerts"></i>
+        </div>
+        <vue-table-dynamic ref="alerts" :params="alerts">
+          <template v-slot:column-0="{ props }">
+            <select v-model="alerts.data[props.row][0]" @change="refresh">
+              <option v-for="a in ['IoT Alert', 'IoT Vulnerability']">
+                {{ a }}
+              </option>
+            </select>
+          </template>
+          <template v-slot:column-1="{ props }">
+            <textarea v-model="alerts.data[props.row][1]"
+                      @change="refresh"
+                      style="width: 200%; height: 90%; line-height: 3ch;">
+            </textarea>
+          </template>
+          <template v-slot:column-2="{ props }">
+            <select v-model="alerts.data[props.row][2]" @change="refresh">
+              <option v-for="group in availableGroups">
+                {{ group }}
+              </option>
+            </select>
+          </template>
+          <template v-slot:column-3="{ props }">
+            <div v-if="props.row > 0">
+              <span>{{ alerts.data[props.row][3].join(', ') }}</span>
+              <br/>
+              <select v-model="alerts.data[props.row][3]" @change="refresh" multiple>
+                <option v-for="group in availableGroups">
+                  {{ group }}
+                </option>
+              </select>
+            </div>
+          </template>
+          <template v-slot:column-4="{ props }">
+            <div v-if="props.row > 0">
+              <i v-if="props.row > 1" class="fa fa-arrow-up" @click="orderUp(props.row)"></i>
+              <i v-if="props.row < alerts.data.length-1" class="fa fa-arrow-down" @click="orderDown(props.row)"></i>
+            </div>
+          </template>
+        </vue-table-dynamic>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    Vue.use(window.default)
+    var app = new Vue({
+      el: '#app',
+      data: {
+        availableGroups: [],
+        deviceIDs: [],
+        devicesText: '',
+        alerts: {
+          data: [
+            ['Alert Type', 'Alert Name Regex', 'Responsible', 'Informed (Ctrl+click to unselect)', 'Order']
+          ],
+          header: 'row',
+          border: true,
+          stripe: true,
+          height: 330,
+          pagination: false,
+          enableSearch: false,
+          showCheck: true,
+          wordWrap: 'break-word',
+          rowHeight: 100
+        },
+        devicesWithoutOwner: {
+          count: 0,
+          data: [
+            ['Device ID without Owner', 'Count']
+          ],
+          header: 'row',
+          border: true,
+          stripe: true,
+          height: 180,
+          pagination: false,
+          enableSearch: false,
+          showCheck: false,
+          wordWrap: 'break-word',
+          sort: [0, 1]
+        },
+        devices: {
+          data: [
+            ['Device ID Regex', 'Owner', 'Number of Matches']
+          ],
+          header: 'row',
+          border: true,
+          stripe: true,
+          height: 180,
+          pagination: false,
+          enableSearch: true,
+          showCheck: true,
+          wordWrap: 'break-word',
+          edit: {
+            column: [0]
+          }
+        },
+        groups: {
+          data: [
+            ['Name', 'Email', 'ServiceNow Table', 'ServiceNow Fields', 'ServiceNow Custom Fields']
+          ],
+          header: 'row',
+          border: true,
+          stripe: true,
+          height: 180,
+          pagination: false,
+          enableSearch: true,
+          showCheck: true,
+          wordWrap: 'break-word',
+          edit: {
+            row: 'all'
+          }
+        },
+        iotConfig: undefined,
+        iotConfigText: ''
+      },
+      created: function () {
+        this.devicesTextChanged();
+      },
+      methods: {
+        orderUp: function(rowNum) {
+          let temp = JSON.parse(JSON.stringify(this.alerts.data[rowNum]));
+          this.alerts.data[rowNum] = this.alerts.data[rowNum-1];
+          this.alerts.data[rowNum-1] = temp;
+          this.refresh();
+        },
+        orderDown: function(rowNum) {
+          let temp = JSON.parse(JSON.stringify(this.alerts.data[rowNum]));
+          this.alerts.data[rowNum] = this.alerts.data[rowNum+1];
+          this.alerts.data[rowNum+1] = temp;
+          this.refresh();
+        },
+        addAlert: function() {
+          this.alerts.data.push(['IoT Alert', '', 'IOT_OWNER', [], this.alerts.data.length]);
+        },
+        deleteAlerts: function() {
+          let ids = []
+          for (let row of this.$refs.alerts.getCheckedRowDatas()) {
+            ids.push(row[4])
+          }
+          if (ids.length == 0) {
+            return;
+          }
+          for (var i = ids.length-1; i >= 0; i--) {
+            this.alerts.data.splice(ids[i], 1)
+          }
+          this.refresh();
+        },
+        addDevice: function() {
+          this.devices.data.splice(1, 0, ['','', 0]);
+        },
+        deleteDevices: function() {
+          let deviceIDs = new Set()
+          for (let checked of this.$refs.devices.getCheckedRowDatas()) {
+            deviceIDs.add(checked[0])
+          }
+          if (deviceIDs.length == 0) {
+            return;
+          }
+          let devices = this.devices.data.splice(1);
+          for (let row of devices) {
+            let deviceID = row[0].trim();
+            if (!(deviceIDs.has(deviceID))) {
+              this.devices.data.push(row);
+            }
+          }
+          this.refresh();
+        },
+        addGroup: function() {
+          this.groups.data.splice(1, 0, ['','','','','']);
+        },
+        deleteGroups: function() {
+          let names = new Set()
+          for (let checked of this.$refs.groups.getCheckedRowDatas()) {
+            names.add(checked[0])
+          }
+          if (names.length == 0) {
+            return;
+          }
+          let groups = this.groups.data.splice(1);
+          for (let row of groups) {
+            let name = row[0].trim();
+            if (!(names.has(name))) {
+              this.groups.data.push(row);
+            }
+          }
+          this.refresh();
+        },
+        devicesTextChanged: function() {
+          this.deviceIDsMap = {};
+          this.devicesText = this.devicesText.trim();
+          if (this.devicesText.length > 0) {
+            let devices = Papa.parse(this.devicesText, { header: true });
+            for (let d of devices.data) {
+              let category = d['category'] ? d['category'].trim() : '';
+              let profile = d['profile'] ? d['profile'].trim() : '';
+              let vendor = d['vendor'] ? d['vendor'].trim() : '';
+              let model = d['model'] ? d['model'].trim() : '';
+              let deviceID = `${category}|${profile}|${vendor}|${model}`;
+              if (!(deviceID in this.deviceIDsMap)) {
+                this.deviceIDsMap[deviceID] = 0;
+              }
+              this.deviceIDsMap[deviceID]++;
+            }
+          }
+          this.iotConfigTextChanged();
+        },
+        devicesChanged: function(rowIndex, columnIndex, data) {
+          this.devices.data[rowIndex][columnIndex] = data;
+          this.refresh();
+        },
+        groupsChanged: function(rowIndex, columnIndex, data) {
+          this.groups.data[rowIndex][columnIndex] = data;
+          this.refresh();
+        },
+        refresh: function() {
+          this.syncToIotConfigText()
+          this.iotConfigTextChanged();
+        },
+        iotConfigTextChanged: function() {
+          if (this.iotConfigText.length > 0) {
+            this.iotConfigText = this.iotConfigText.trim();
+            try {
+              this.iotConfig = JSON.parse(this.iotConfigText);
+              this.groups.data.splice(1);
+              this.devices.data.splice(1);
+              this.availableGroups = [];
+              this.devicesWithoutOwner.count = 0;
+              this.devicesWithoutOwner.data.splice(1);
+              this.alerts.data.splice(1);
+
+              // let vue delete the rows first, so we have setTimeout here
+              setTimeout(() => {
+                let groups = [];
+                for (let name in this.iotConfig.groups) {
+                  let group = this.iotConfig.groups[name];
+                  let snow = {
+                    'table': '',
+                    'fields': '',
+                    'custom_fields': ''
+                  }
+                  if (group.snow) {
+                    snow['table'] = group.snow.table ? group.snow.table : '';
+                    snow['fields'] = '';
+                    if (group.snow.fields) {
+                      fields = []
+                      for (let key in group.snow.fields) {
+                        fields.push(`${key}:${group.snow.fields[key]}`)
+                      }
+                      snow['fields'] = fields.join(',');
+                    }
+                    snow['custom_fields'] = '';
+                    if (group.snow.custom_fields) {
+                      custom_fields = []
+                      for (let key in group.snow.custom_fields) {
+                        custom_fields.push(`${key}:${group.snow.custom_fields[key]}`)
+                      }
+                      snow['custom_fields'] = custom_fields.join(',');
+                    }
+                  }
+                  let snowTable = group.snow?.table
+                  groups.push([
+                    name,
+                    group.email,
+                    snow['table'],
+                    snow['fields'],
+                    snow['custom_fields']
+                  ]);
+                  this.availableGroups.push(name);
+                }
+                groups = groups.sort(function(a, b) {
+                  return a[0].localeCompare(b[0]);
+                });
+                this.availableGroups = this.availableGroups.sort();
+                this.availableGroups.unshift('IOT_OWNER')
+                this.groups.data = this.groups.data.concat(groups);
+
+                // for device configurations
+                let devices = [];
+                if (this.iotConfig.devices) {
+                  for (let device of this.iotConfig.devices) {
+                    devices.push([
+                      device['device_id'],
+                      device['owner'],
+                      0
+                    ]);
+                  }
+
+                  // get the number of matches
+                  devices = devices.sort(function(a, b) {
+                    return b[0].localeCompare(a[0]);
+                  })
+                  let devicesWithoutOwner = [];
+                  for (let deviceID in this.deviceIDsMap) {
+                    let matched = false;
+                    for (let i = 1; i < devices.length; i++) {
+                      let regex = devices[i][0]
+                      if (regex.length > 0 && deviceID.match(`^${regex}$`)) {
+                        devices[i][2] += this.deviceIDsMap[deviceID];
+                        matched = true;
+                        break;
+                      }
+                    }
+                    if (!matched) {
+                      this.devicesWithoutOwner.count += this.deviceIDsMap[deviceID];
+                      devicesWithoutOwner.push([deviceID, this.deviceIDsMap[deviceID]]);
+                    }
+                  }
+
+                  devicesWithoutOwner = devicesWithoutOwner.sort(function(a, b) {
+                    return a[0].localeCompare(b[0]);
+                  });
+                  this.devicesWithoutOwner.data = this.devicesWithoutOwner.data.concat(devicesWithoutOwner);
+
+                  devices = devices.reverse();
+                  this.devices.data = this.devices.data.concat(devices);
+                }
+
+                // for the alerts
+                let alerts = [];
+                if (this.iotConfig.alerts) {
+                  for (let alert of this.iotConfig.alerts) {
+                    let r = '';
+                    let i = [];
+                    if (alert.raci) {
+                      if (alert.raci.r) {
+                        r = alert.raci.r;
+                      }
+                      if (alert.raci.i) {
+                        i = alert.raci.i;
+                      }
+                    }
+                    alerts.push([
+                      alert['iot_raw_type'],
+                      alert['name_regex'] ? alert['name_regex'].join('\n') : '',
+                      r,
+                      i,
+                      alerts.length+1
+                    ]);
+                  }
+                  this.alerts.data = this.alerts.data.concat(alerts);
+                }
+              }, 0);
+            } catch (e) {
+              console.error(e);
+            }
+          }
+        },
+        syncToIotConfigText: function() {
+          this.iotConfig.groups = {};
+          for (let row of this.groups.data.slice(1)) {
+            let name = row[0].trim();
+            let email = row[1].trim();
+            let group = {
+              email: email
+            };
+            if (row[2].trim().length > 0) {
+              group['snow'] = {
+                table: row[2].trim()
+              }
+            }
+            if (row[3].trim().length > 0) {
+              group['snow']['fields'] = {}
+              for (let kv of row[3].trim().split(',')) {
+                kvTuple = kv.split(':');
+                group['snow']['fields'][kvTuple[0]] = kvTuple[1];
+              }
+            }
+            if (row[4].trim().length > 0) {
+              group['snow']['custom_fields'] = {}
+              for (let kv of row[4].trim().split(',')) {
+                kvTuple = kv.split(':');
+                group['snow']['custom_fields'][kvTuple[0]] = kvTuple[1];
+              }
+            }
+            if (name && name.length > 0) {
+              this.iotConfig.groups[name] = group;
+            }
+          }
+
+          this.iotConfig.devices = []
+          for (let row of this.devices.data.slice(1)) {
+            this.iotConfig.devices.push({
+              device_id: row[0],
+              owner: row[1]
+            })
+          }
+
+          this.iotConfig.alerts = []
+          for (let row of this.alerts.data.slice(1)) {
+            let alert = {
+              iot_raw_type: row[0]
+            };
+            if (row[1].trim().length > 0) {
+              alert['name_regex'] = row[1].trim().split('\n');
+            }
+            if (row[2] && row[2].trim().length > 0) {
+              if (!('raci' in alert)) {
+                alert['raci'] = {};
+              }
+              alert['raci']['r'] = row[2].trim();
+            }
+            if (row[3]) {
+              if (!('raci' in alert)) {
+                alert['raci'] = {};
+              }
+              alert['raci']['i'] = row[3];
+            }
+            this.iotConfig.alerts.push(alert);
+          }
+
+          this.iotConfigText = JSON.stringify(this.iotConfig, null, 2);
+        }
+      }
+    })
+  </script>
+</body>
+</html>
